@@ -4,13 +4,10 @@ from werkzeug.security import generate_password_hash, check_password_hash
 import datetime
 import jwt
 import os
-<<<<<<< HEAD
 from .chat_engine import get_mitrai_response
 from app.toolkit_logic import get_toolkit_content
 from app.chat_engine import get_mitrai_response
 from app.toolkit_data import TOOLKIT_CONTENT
-=======
->>>>>>> a7f3e2a3acea6b4d2950f6b45f04e1cd6bb38f8b
 
 def setup_routes(app):
 
@@ -156,7 +153,6 @@ def setup_routes(app):
             nickname = data.get('nickname')
             db.users.update_one({"nickname": nickname}, {"$set": {"language": language}})
         
-<<<<<<< HEAD
         return jsonify({"message": f"Language updated to {language} successfully!"}), 200
     
     @app.route('/api/chat', methods=['POST'])
@@ -233,28 +229,59 @@ def setup_routes(app):
     @app.route('/api/mood/analytics', methods=['GET'])
     def get_analytics():
         try:
-            # Hamesha sabse latest (sabse naya) data uthayein
-            latest_entry = db.moods.find({"user_id": "onboarding_user"}).sort("timestamp", -1).limit(1)
+            # 1. MongoDB se pichle 7 days ka data fetch karein
+            all_moods = list(db.moods.find({"user_id": "onboarding_user"}).sort("timestamp", -1).limit(20))
             
-            mood_list = list(latest_entry)
-            if not mood_list:
-                return jsonify({"avatar_state": "neutral", "chart_data": []}), 200
+            if not all_moods:
+                return jsonify({"avatar_state": "neutral", "latest_intensity": 3, "chart_data": []}), 200
 
-            entry = mood_list[0]
-            latest_intensity = entry.get("intensity", 3)
+            # 2. Latest data for Avatar
+            latest = all_moods[0]
+            latest_intensity = latest.get("intensity", 3)
+            avatar_state = "neutral"
+            if latest_intensity >= 4: avatar_state = "happy"
+            elif latest_intensity <= 2: avatar_state = "stressed"
 
-            # Avatar state decide karein
-            avatar_state = "happy"
-            if latest_intensity <= 2: avatar_state = "stressed"
-            elif latest_intensity == 3: avatar_state = "neutral"
+            # 3. Final Fix: Grouping by Date (Taaki same day par multiple points na aayein)
+            # Hum har din ka average intensity nikalenge
+            daily_data = {}
+            for m in all_moods:
+                day_str = m["timestamp"].strftime("%d %b")
+                if day_str not in daily_data:
+                    daily_data[day_str] = []
+                daily_data[day_str].append(m.get("intensity", 3))
+
+            # Purana grouping wala logic hata kar ise daalein
+            # Format: Har entry ko alag point maano
+                chart_data = []
+                for m in reversed(all_moods):
+                    chart_data.append({
+                        "day": m["timestamp"].strftime("%d %b %H:%M"), # Date + Time taaki curve bane
+                        "mood": int(m.get("intensity", 3)) # Ensure it's a number
+                    })
+
+                return jsonify({
+                    "avatar_state": avatar_state,
+                    "latest_intensity": int(latest_intensity), # NaN error se bachne ke liye
+                    "chart_data": chart_data
+                }), 200
+            for day in reversed(sorted_days):
+                avg_mood = sum(daily_data[day]) / len(daily_data[day])
+                chart_data.append({
+                    "day": day,
+                    "mood": round(avg_mood, 1) # Decimal point rakha hai smooth graph ke liye
+                })
 
             return jsonify({
                 "avatar_state": avatar_state,
-                "latest_intensity": latest_intensity
+                "latest_intensity": latest_intensity,
+                "chart_data": chart_data
             }), 200
+
         except Exception as e:
+            print(f"Final Analytics Error: {e}")
             return jsonify({"error": str(e)}), 500
-    
+        
     @app.route('/api/toolkit/<mood>', methods=['GET'])
     def get_toolkit(mood):
     
@@ -270,14 +297,4 @@ def setup_routes(app):
         }
     
         return jsonify(response_data), 200
-    
-    '''@app.route('/api/mood/analytics', methods=['GET'])
-    def get_analytics():
-        # TEST: Bina kisi calculation ke direct 'happy' bhej kar dekhte hain
-        return jsonify({
-            "avatar_state": "happy", 
-            "latest_intensity": 5
-        }), 200'''
-=======
-        return jsonify({"message": f"Language updated to {language} successfully!"}), 200
->>>>>>> a7f3e2a3acea6b4d2950f6b45f04e1cd6bb38f8b
+
