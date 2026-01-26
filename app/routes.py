@@ -157,144 +157,134 @@ def setup_routes(app):
     
     @app.route('/api/chat', methods=['POST'])
     def chat_with_mitr():
-        data = request.json
-        user_msg = data.get("message")
-        
-        if not user_msg:
-            return jsonify({"error": "Message is empty"}), 400
+        try:
+            data = request.json
+            user_msg = data.get("message")
+            user_id = data.get("user_id", "onboarding_user")
             
-        # Gemini se reply lein
-        ai_reply = get_mitrai_response(user_msg)
+            # Aapka Gemini AI logic yahan rahega
+            ai_reply = get_mitrai_response(user_msg) 
+
+            # User ka message save karein
+            db.chats.insert_one({
+                "user_id": user_id,
+                "text": user_msg,
+                "sender": "user",
+                "timestamp": datetime.datetime.utcnow()
+            })
+            # Bot ka reply save karein
+            db.chats.insert_one({
+                "user_id": user_id,
+                "text": ai_reply,
+                "sender": "bot",
+                "timestamp": datetime.datetime.utcnow()
+            })
+
+            return jsonify({"reply": ai_reply})
+        except Exception as e:
+                return jsonify({"error": str(e)}), 500
         
-        return jsonify({
-            "reply": ai_reply,
-            "sender": "MitrAI"
-        })
     @app.route('/api/toolkit/videos', methods=['GET'])
     def get_videos():
         data = get_toolkit_content('video')
         return jsonify(data)
 
-    @app.route('/api/toolkit/activities', methods=['GET'])
-    def get_activities():
-        data = get_toolkit_content('activity')
-        return jsonify(data)
-
-    @app.route('/api/toolkit/stories', methods=['GET'])
-    def get_stories():
-        data = get_toolkit_content('story')
-        return jsonify(data)
-    
-    @app.route('/api/mood/initial-quiz', methods=['POST'])
-    def save_initial_quiz():
-        try:
-            data = request.json.get('answers')
-            if not data:
-                return jsonify({"error": "No data received"}), 400
-
-            # Behtar Mapping: 4 aur 5 wale options "Happy" banayenge
-            mapping = {
-                "SAD": 1, "STRESSED": 1, "ANXIOUS": 2, "TIRED": 2,
-                "NEUTRAL": 3, "OKAY": 3,
-                "HAPPY": 4, "CALM": 4, "GOOD": 4,
-                "EXCITED": 5, "GREAT": 5, "AMAZING": 5
-            }
-
-            total_score = 0
-            count = 0
-
-            for item in data:
-                ans_label = str(item.get('answer', '')).upper()
-                if ans_label in mapping:
-                    total_score += mapping[ans_label]
-                    count += 1
-
-            # Average Score nikalna
-            final_intensity = round(total_score / count) if count > 0 else 3
-
-            quiz_entry = {
-                "user_id": "onboarding_user",
-                "responses": data,
-                "intensity": final_intensity,
-                "is_initial": True,
-                "timestamp": datetime.datetime.utcnow() 
-            }
-
-            db.moods.insert_one(quiz_entry)
-            return jsonify({"status": "success", "calculated_intensity": final_intensity}), 200
-
-        except Exception as e:
-            return jsonify({"error": str(e)}), 500
-        
     @app.route('/api/mood/analytics', methods=['GET'])
     def get_analytics():
         try:
-            # 1. MongoDB se pichle 7 days ka data fetch karein
+            # 1. MongoDB se data fetch karein
+            # 'onboarding_user' ki jagah dynamic user_id bhi use kar sakte hain
             all_moods = list(db.moods.find({"user_id": "onboarding_user"}).sort("timestamp", -1).limit(20))
             
             if not all_moods:
-                return jsonify({"avatar_state": "neutral", "latest_intensity": 3, "chart_data": []}), 200
+                return jsonify({
+                    "avatar_state": "neutral", 
+                    "latest_intensity": 3, 
+                    "chart_data": []
+                }), 200
 
             # 2. Latest data for Avatar
             latest = all_moods[0]
             latest_intensity = latest.get("intensity", 3)
+            
             avatar_state = "neutral"
-            if latest_intensity >= 4: avatar_state = "happy"
-            elif latest_intensity <= 2: avatar_state = "stressed"
+            if latest_intensity >= 4: 
+                avatar_state = "happy"
+            elif latest_intensity <= 2: 
+                avatar_state = "stressed"
 
-            # 3. Final Fix: Grouping by Date (Taaki same day par multiple points na aayein)
-            # Hum har din ka average intensity nikalenge
-            daily_data = {}
-            for m in all_moods:
-                day_str = m["timestamp"].strftime("%d %b")
-                if day_str not in daily_data:
-                    daily_data[day_str] = []
-                daily_data[day_str].append(m.get("intensity", 3))
-
-            # Purana grouping wala logic hata kar ise daalein
-            # Format: Har entry ko alag point maano
-                chart_data = []
-                for m in reversed(all_moods):
-                    chart_data.append({
-                        "day": m["timestamp"].strftime("%d %b %H:%M"), # Date + Time taaki curve bane
-                        "mood": int(m.get("intensity", 3)) # Ensure it's a number
-                    })
-
-                return jsonify({
-                    "avatar_state": avatar_state,
-                    "latest_intensity": int(latest_intensity), # NaN error se bachne ke liye
-                    "chart_data": chart_data
-                }), 200
-            for day in reversed(sorted_days):
-                avg_mood = sum(daily_data[day]) / len(daily_data[day])
+            # 3. Chart Data taiyaar karein (Purana grouping logic hata kar clean loop)
+            chart_data = []
+            # Reversed taaki graph left-to-right (purane se naya) chale
+            for m in reversed(all_moods):
+                # Check if timestamp exists to avoid crash
+                ts = m.get("timestamp")
+                day_label = ts.strftime("%d %b %H:%M") if ts else "N/A"
+                
                 chart_data.append({
-                    "day": day,
-                    "mood": round(avg_mood, 1) # Decimal point rakha hai smooth graph ke liye
+                    "day": day_label, 
+                    "mood": int(m.get("intensity", 3))
                 })
 
+            # Final single return jo pura data ek saath bhejega
             return jsonify({
                 "avatar_state": avatar_state,
-                "latest_intensity": latest_intensity,
+                "latest_intensity": int(latest_intensity),
                 "chart_data": chart_data
             }), 200
 
         except Exception as e:
             print(f"Final Analytics Error: {e}")
             return jsonify({"error": str(e)}), 500
+    
+    @app.route('/api/chat/history/<user_id>', methods=['GET'])
+    def get_chat_history(user_id):
+        try:
+        # User ki sari chats uthayein aur purani se nayi ke order mein lagayein
+            history = list(db.chats.find({"user_id": user_id}).sort("timestamp", 1))
+            print(f"Fetching history for: {user_id}")
+            # MongoDB ke format ko JSON format mein badlein
+            formatted_history = []
+            for chat in history:
+                formatted_history.append({
+                    "text": chat.get("text", ""),
+                    "sender": chat.get("sender", "bot")
+                })
+                
+            return jsonify(formatted_history), 200
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
         
-    @app.route('/api/toolkit/<mood>', methods=['GET'])
-    def get_toolkit(mood):
-    
-        selected_content = TOOLKIT_CONTENT.get(mood.lower(), TOOLKIT_CONTENT['neutral'])
+        # Calendar events fetch karne ke liye
+    @app.route('/api/calendar/<user_id>', methods=['GET'])
+    def get_calendar_events(user_id):
+        try:
+            # Calendar ke liye data fetch
+            mood_data = list(db.moods.find({"user_id": user_id}, {"_id": 0}))
+            return jsonify(mood_data), 200
+        except Exception as e:
+            print(f"Calendar Fetch Error: {e}")
+            return jsonify([]), 500 # Kuch galat hua toh khali list bhej do
+        # Naya event save karne ke liye
+    @app.route('/api/calendar/save', methods=['POST'])
+    def save_calendar_event():
+        try:
+            data = request.json
+            if not data.get('user_id') or not data.get('date'):
+                return jsonify({"error": "Missing data"}), 400
 
-    # Frontend ko exactly ye structure chahiye taaki error na aaye
-        response_data = {
-            "videos": selected_content.get("videos", []),
-            "activities": selected_content.get("activities", []),
-            "stories": selected_content.get("stories", {
-                "romance": [], "comedy": [], "suspense": [], "wisdom": []
-            })
-        }
-    
-        return jsonify(response_data), 200
+            # Upsert logic: Agar usi din ka data hai toh update, nahi toh naya insert
+            db.moods.update_one(
+                {"user_id": data['user_id'], "date": data['date']},
+                {"$set": {
+                    "mood": data.get('mood'),
+                    "score": data.get('score'),
+                    "color": data.get('color'),
+                    "timestamp": datetime.datetime.utcnow() # Real-time tracking ke liye
+                }},
+                upsert=True
+            )
+            return jsonify({"message": "Mood saved successfully!"}), 201
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
 
