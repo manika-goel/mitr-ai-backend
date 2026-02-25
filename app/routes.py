@@ -165,11 +165,19 @@ def setup_routes(app):
             # Aapka Gemini AI logic yahan rahega
             ai_reply = get_mitrai_response(user_msg) 
 
+            stress_keywords = ["suicide", "depressed", "kill", "hopeless", "can't take it", "hurt myself", "panic", "anxiety"]
+
+            stress_score = 0
+            if any(word in user_msg for word in stress_keywords):
+                stress_score = 90  # High stress detect hua
+            else:
+                stress_score = 30  # Normal stress
             # User ka message save karein
             db.chats.insert_one({
                 "user_id": user_id,
                 "text": user_msg,
                 "sender": "user",
+                "stress_level": stress_score,
                 "timestamp": datetime.datetime.utcnow()
             })
             # Bot ka reply save karein
@@ -189,6 +197,51 @@ def setup_routes(app):
         data = get_toolkit_content('video')
         return jsonify(data)
 
+
+    @app.route('/api/mood/initial-quiz', methods=['POST'])
+    def save_initial_quiz():
+        try:
+            data = request.json.get('answers')
+            if not data:
+                return jsonify({"error": "No data received"}), 400
+
+            # Mood ko points mein convert karne ka logic
+            mapping = {
+                "SAD": 1, "STRESSED": 1, "ANXIOUS": 2, "TIRED": 2,
+                "NEUTRAL": 3, "OKAY": 3,
+                "HAPPY": 4, "CALM": 4, "GOOD": 4,
+                "EXCITED": 5, "GREAT": 5, "AMAZING": 5
+            }
+
+            total_score = 0
+            count = 0
+            for item in data:
+                ans_label = str(item.get('answer', '')).upper()
+                if ans_label in mapping:
+                    total_score += mapping[ans_label]
+                    count += 1
+
+            # Average intensity nikalna
+            final_intensity = round(total_score / count) if count > 0 else 3
+
+            # Database mein save karna
+            quiz_entry = {
+                "user_id": "onboarding_user",
+                "responses": data,
+                "intensity": final_intensity,
+                "is_initial": True,
+                "timestamp": datetime.datetime.utcnow(),
+                "date": datetime.datetime.utcnow().strftime('%Y-%m-%d') # Ye calendar ke liye zaruri hai
+            }
+
+            db.moods.insert_one(quiz_entry)
+            return jsonify({"status": "success", "calculated_intensity": final_intensity}), 200
+
+        except Exception as e:
+            print(f"Quiz Save Error: {e}")
+            return jsonify({"error": str(e)}), 500
+        
+        
     @app.route('/api/mood/analytics', methods=['GET'])
     def get_analytics():
         try:
@@ -287,4 +340,18 @@ def setup_routes(app):
             return jsonify({"message": "Mood saved successfully!"}), 201
         except Exception as e:
             return jsonify({"error": str(e)}), 500
-
+        
+    @app.route('/api/counsellor/info', methods=['GET'])
+    def counsellor_info():
+        # Abhi ke liye aapki team ka details
+        support_data = {
+            "name": "MitrAI Support Expert",
+            "availability": "24/7 Support",
+            "contact_type": "WhatsApp / Call",
+            "contact_value": "+91-9412619588",
+            "message_template": "Hello Mitr, I need urgent support.",
+            "bio": "Experienced in crisis management and mental well-being."
+        }
+        return jsonify(support_data), 200
+        
+        
